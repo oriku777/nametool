@@ -1,0 +1,19 @@
+{
+  "name": "wp-auto-post",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WordPress REST API を使って記事を投稿するCLIツール",
+  "type": "module",
+  "bin": {
+    "wp-post": "./src/cli.js"
+  },
+  "scripts": {
+    "post": "node src/cli.js post",
+    "whoami": "node src/cli.js whoami"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "marked": "^13.0.3"
+  }
+}
