@@ -6,6 +6,7 @@ import { Command, Option } from 'commander';
 import dotenv from 'dotenv';
 import { marked } from 'marked';
 import { WpClient } from './wp-client.js';
+import { WpBrowserClient } from './wp-browser-client.js';
 
 dotenv.config();
 
@@ -31,6 +32,17 @@ function toHtml(raw, format) {
   if (format === 'html') return raw;
   // markdown (default): convert to HTML so it renders correctly in the block editor
   return marked.parse(raw);
+}
+
+async function resolveContent(opts) {
+  const sources = [opts.content, opts.contentFile].filter(Boolean);
+  if (sources.length > 1) {
+    throw new Error('--content と --content-file は同時に指定できません。');
+  }
+  if (opts.content) return opts.content;
+  if (opts.contentFile) return readFile(opts.contentFile, 'utf8');
+  if (!process.stdin.isTTY) return readStdin();
+  throw new Error('本文が指定されていません。--content, --content-file、または標準入力で渡してください。');
 }
 
 const program = new Command();
@@ -78,22 +90,11 @@ program
       return;
     }
 
-    const sources = [opts.content, opts.contentFile].filter(Boolean);
-    if (sources.length > 1) {
-      console.error('--content と --content-file は同時に指定できません。');
-      process.exitCode = 1;
-      return;
-    }
-
     let raw;
-    if (opts.content) {
-      raw = opts.content;
-    } else if (opts.contentFile) {
-      raw = await readFile(opts.contentFile, 'utf8');
-    } else if (!process.stdin.isTTY) {
-      raw = await readStdin();
-    } else {
-      console.error('本文が指定されていません。--content, --content-file、または標準入力で渡してください。');
+    try {
+      raw = await resolveContent(opts);
+    } catch (err) {
+      console.error(err.message);
       process.exitCode = 1;
       return;
     }
@@ -126,6 +127,54 @@ program
     if (post.status === 'publish') {
       console.log(`公開URL: ${post.link}`);
     }
+  });
+
+program
+  .command('post-browser')
+  .description(
+    '記事を投稿します（ブラウザ自動操作版・実験的）。REST APIが使えない場合の代替手段です。カテゴリ/タグ/アイキャッチ画像には未対応です。'
+  )
+  .requiredOption('--title <title>', '記事タイトル')
+  .option('--content <text>', '本文（Markdown）。--content-file や標準入力と併用不可')
+  .option('--content-file <path>', '本文が書かれたファイルのパス')
+  .addOption(new Option('--format <format>', '本文の形式').choices(['markdown', 'html']).default('markdown'))
+  .addOption(
+    new Option('--status <status>', '投稿ステータス').choices(['draft', 'publish']).default('draft')
+  )
+  .option('--yes', 'status=publish のときに確認なしで即時公開する', false)
+  .option('--headed', 'ブラウザ画面を表示して実行する（デバッグ用）', false)
+  .action(async (opts) => {
+    if (opts.status === 'publish' && !opts.yes) {
+      console.error(
+        '公開(publish)を指定しましたが --yes が付いていません。\n' +
+          '内容を確認せずに一般公開すると事実誤り（募集人員・内申点など）のリスクがあるため、\n' +
+          '安全のため一度 --status draft で下書き保存し、管理画面で確認してから公開するか、\n' +
+          '確認済みなら --yes を付けて再実行してください。'
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    let raw;
+    try {
+      raw = await resolveContent(opts);
+    } catch (err) {
+      console.error(err.message);
+      process.exitCode = 1;
+      return;
+    }
+
+    const content = toHtml(raw, opts.format);
+
+    const client = new WpBrowserClient({
+      baseUrl: process.env.WP_URL,
+      username: process.env.WP_USERNAME,
+      password: process.env.WP_PASSWORD,
+      headless: !opts.headed,
+    });
+
+    const result = await client.createPost({ title: opts.title, content, status: opts.status });
+    console.log(`投稿完了 [${result.status}]。編集画面: ${result.url}`);
   });
 
 program.parseAsync(process.argv).catch((err) => {
